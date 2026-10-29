@@ -1,4 +1,33 @@
-.venv/
+# Python cache files
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables and passwords
 .env
+.env.*
+!.env.example
+
+# Build files
+build/
+dist/
+*.egg-info/
+
+# Testing files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor files
+.vscode/
+.idea/
+
+# Project ZIP and nested folder
+teacher_management.zip
+teacher_management/
