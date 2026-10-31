@@ -2,7 +2,6 @@
 from sqlalchemy import Column, Integer, String
 from database import Base
 
-
 class Student(Base):
     __tablename__ = "students"
 
@@ -11,3 +10,12 @@ class Student(Base):
     age = Column(Integer, nullable=False)
     email = Column(String(150), unique=True, index=True, nullable=False)
     course = Column(String(100), nullable=False)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(100), unique=True, index=True, nullable=False)
+    email = Column(String(150), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)

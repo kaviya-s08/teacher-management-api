@@ -6,7 +6,7 @@ from sqlalchemy.engine import URL
 DATABASE_URL = URL.create(
     drivername="postgresql+psycopg2",
     username="postgres",
-    password="123456",
+    password="@Kaviya08052008",
     host="localhost",
     port=5432,
     database="teacher_management_db"
