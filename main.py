@@ -11,7 +11,7 @@ from auth import router as auth_router, get_current_user
 
 
 # Create database tables
-Base.metadata.create_all(bind=engine)
+#Base.metadata.create_all(bind=engine)
 
 
 # Create FastAPI application
