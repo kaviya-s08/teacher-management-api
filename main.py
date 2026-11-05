@@ -1,8 +1,12 @@
 
+from fastapi import (
+    FastAPI,
+    Depends,
+    HTTPException,
+    status,
+    BackgroundTasks
+)
 
-
-
-from fastapi import FastAPI, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -25,13 +29,12 @@ from schemas import (
 
 from auth import router as auth_router, get_current_user
 
+from email_service import send_teacher_registration_email
+
 
 # --------------------------------------------------
 # 1. CREATE DATABASE TABLES
 # --------------------------------------------------
-
-# Importing models above registers all models with Base.metadata.
-# This creates missing tables but does not modify existing tables.
 
 Base.metadata.create_all(bind=engine)
 
@@ -42,12 +45,10 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Teacher Management API",
-    description="Student Management API with JWT Authentication and SQLAlchemy Relationships",
-    version="3.0.0"
+    description="Teacher and Student Management API with JWT Authentication, SQLAlchemy Relationships and Background Email Notifications",
+    version="4.0.0"
 )
 
-
-# Connect authentication APIs
 app.include_router(auth_router)
 
 
@@ -164,7 +165,6 @@ def update_student(
             detail="Student not found"
         )
 
-    # Update only the fields provided by the user
     update_data = student_data.model_dump(exclude_unset=True)
 
     for field, value in update_data.items():
@@ -216,15 +216,78 @@ def delete_student(
 
 
 # --------------------------------------------------
-# 9. REQUEST MODEL FOR ASSIGNING SUBJECTS
+# 9. TEACHER REGISTRATION REQUEST MODEL
+# --------------------------------------------------
+
+class TeacherCreateRequest(BaseModel):
+
+    name: str = Field(min_length=2, max_length=100)
+
+    email: str = Field(min_length=5, max_length=255)
+
+
+# --------------------------------------------------
+# 10. REGISTER TEACHER WITH BACKGROUND EMAIL
+# --------------------------------------------------
+
+@app.post(
+    "/teachers",
+    status_code=status.HTTP_201_CREATED
+)
+def create_teacher(
+    teacher_data: TeacherCreateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    new_teacher = Teacher(
+        name=teacher_data.name,
+        email=teacher_data.email
+    )
+
+    db.add(new_teacher)
+
+    try:
+        db.commit()
+        db.refresh(new_teacher)
+
+    except IntegrityError:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="A teacher with this email already exists"
+        )
+
+    # Schedule email notification in background
+    background_tasks.add_task(
+        send_teacher_registration_email,
+        new_teacher.email,
+        new_teacher.name
+    )
+
+    return {
+        "message": "Teacher registered successfully. Email notification scheduled.",
+        "teacher": {
+            "id": new_teacher.id,
+            "name": new_teacher.name,
+            "email": new_teacher.email
+        }
+    }
+
+
+# --------------------------------------------------
+# 11. REQUEST MODEL FOR ASSIGNING SUBJECTS
 # --------------------------------------------------
 
 class SubjectAssignment(BaseModel):
+
     subject_ids: list[int] = Field(default_factory=list)
 
 
 # --------------------------------------------------
-# 10. ASSIGN SUBJECTS TO A TEACHER
+# 12. ASSIGN SUBJECTS TO A TEACHER
 # --------------------------------------------------
 
 @app.post("/teachers/{teacher_id}/subjects")
@@ -235,7 +298,6 @@ def assign_subjects(
     current_user: User = Depends(get_current_user)
 ):
 
-    # Find teacher
     teacher = db.query(Teacher).filter(
         Teacher.id == teacher_id
     ).first()
@@ -246,10 +308,8 @@ def assign_subjects(
             detail="Teacher not found"
         )
 
-    # Remove duplicate subject IDs
     subject_ids = list(set(assignment.subject_ids))
 
-    # Find the requested subjects
     subjects = db.query(Subject).filter(
         Subject.id.in_(subject_ids)
     ).all()
@@ -264,7 +324,6 @@ def assign_subjects(
             detail=f"Subjects not found: {sorted(missing_ids)}"
         )
 
-    # Add subjects without removing existing assignments
     existing_ids = {subject.id for subject in teacher.subjects}
 
     for subject in subjects:
@@ -289,7 +348,7 @@ def assign_subjects(
 
 
 # --------------------------------------------------
-# 11. GET SUBJECTS ASSIGNED TO A TEACHER
+# 13. GET SUBJECTS ASSIGNED TO A TEACHER
 # --------------------------------------------------
 
 @app.get("/teachers/{teacher_id}/subjects")
@@ -324,7 +383,7 @@ def get_teacher_subjects(
 
 
 # --------------------------------------------------
-# 12. GET ALL TEACHERS WITH THEIR SUBJECTS
+# 14. GET ALL TEACHERS WITH THEIR SUBJECTS
 # --------------------------------------------------
 
 @app.get("/teachers")
