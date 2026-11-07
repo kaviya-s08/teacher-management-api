@@ -1,4 +1,6 @@
 
+
+
 from fastapi import (
     FastAPI,
     Depends,
@@ -31,6 +33,13 @@ from auth import router as auth_router, get_current_user
 
 from email_service import send_teacher_registration_email
 
+# Redis cache imports
+from cache_service import (
+    get_cached_teachers,
+    set_cached_teachers,
+    clear_teacher_cache
+)
+
 
 # --------------------------------------------------
 # 1. CREATE DATABASE TABLES
@@ -45,8 +54,8 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Teacher Management API",
-    description="Teacher and Student Management API with JWT Authentication, SQLAlchemy Relationships and Background Email Notifications",
-    version="4.0.0"
+    description="Teacher and Student Management API with JWT Authentication, SQLAlchemy Relationships, Background Email Notifications and Redis Caching",
+    version="6.0.0"
 )
 
 app.include_router(auth_router)
@@ -227,7 +236,18 @@ class TeacherCreateRequest(BaseModel):
 
 
 # --------------------------------------------------
-# 10. REGISTER TEACHER WITH BACKGROUND EMAIL
+# 10. TEACHER UPDATE REQUEST MODEL
+# --------------------------------------------------
+
+class TeacherUpdateRequest(BaseModel):
+
+    name: str = Field(min_length=2, max_length=100)
+
+    email: str = Field(min_length=5, max_length=255)
+
+
+# --------------------------------------------------
+# 11. REGISTER TEACHER WITH BACKGROUND EMAIL
 # --------------------------------------------------
 
 @app.post(
@@ -260,6 +280,9 @@ def create_teacher(
             detail="A teacher with this email already exists"
         )
 
+    # Clear cache after successful teacher registration
+    clear_teacher_cache()
+
     # Schedule email notification in background
     background_tasks.add_task(
         send_teacher_registration_email,
@@ -278,7 +301,100 @@ def create_teacher(
 
 
 # --------------------------------------------------
-# 11. REQUEST MODEL FOR ASSIGNING SUBJECTS
+# 12. UPDATE TEACHER
+# --------------------------------------------------
+
+@app.put("/teachers/{teacher_id}")
+def update_teacher(
+    teacher_id: int,
+    teacher_data: TeacherUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    teacher = db.query(Teacher).filter(
+        Teacher.id == teacher_id
+    ).first()
+
+    if teacher is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Teacher not found"
+        )
+
+    teacher.name = teacher_data.name
+    teacher.email = teacher_data.email
+
+    try:
+        db.commit()
+        db.refresh(teacher)
+
+    except IntegrityError:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="A teacher with this email already exists"
+        )
+
+    # Clear cache after successful update
+    clear_teacher_cache()
+
+    return {
+        "message": "Teacher updated successfully",
+        "teacher": {
+            "id": teacher.id,
+            "name": teacher.name,
+            "email": teacher.email
+        }
+    }
+
+
+# --------------------------------------------------
+# 13. DELETE TEACHER
+# --------------------------------------------------
+
+@app.delete("/teachers/{teacher_id}")
+def delete_teacher(
+    teacher_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    teacher = db.query(Teacher).filter(
+        Teacher.id == teacher_id
+    ).first()
+
+    if teacher is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Teacher not found"
+        )
+
+    db.delete(teacher)
+
+    try:
+        db.commit()
+
+    except IntegrityError:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="Unable to delete teacher because related records exist"
+        )
+
+    # Clear cache after successful deletion
+    clear_teacher_cache()
+
+    return {
+        "message": "Teacher deleted successfully",
+        "id": teacher_id
+    }
+
+
+# --------------------------------------------------
+# 14. REQUEST MODEL FOR ASSIGNING SUBJECTS
 # --------------------------------------------------
 
 class SubjectAssignment(BaseModel):
@@ -287,7 +403,7 @@ class SubjectAssignment(BaseModel):
 
 
 # --------------------------------------------------
-# 12. ASSIGN SUBJECTS TO A TEACHER
+# 15. ASSIGN SUBJECTS TO A TEACHER
 # --------------------------------------------------
 
 @app.post("/teachers/{teacher_id}/subjects")
@@ -333,6 +449,9 @@ def assign_subjects(
     db.commit()
     db.refresh(teacher)
 
+    # Clear cache because assigned subjects changed
+    clear_teacher_cache()
+
     return {
         "message": "Subjects assigned successfully",
         "teacher_id": teacher.id,
@@ -348,7 +467,7 @@ def assign_subjects(
 
 
 # --------------------------------------------------
-# 13. GET SUBJECTS ASSIGNED TO A TEACHER
+# 16. GET SUBJECTS ASSIGNED TO A TEACHER
 # --------------------------------------------------
 
 @app.get("/teachers/{teacher_id}/subjects")
@@ -383,7 +502,7 @@ def get_teacher_subjects(
 
 
 # --------------------------------------------------
-# 14. GET ALL TEACHERS WITH THEIR SUBJECTS
+# 17. GET ALL TEACHERS WITH THEIR SUBJECTS
 # --------------------------------------------------
 
 @app.get("/teachers")
@@ -392,6 +511,16 @@ def get_all_teachers(
     current_user: User = Depends(get_current_user)
 ):
 
+    # Step 1: Check Redis cache
+    cached_teachers = get_cached_teachers()
+
+    if cached_teachers is not None:
+        print("Redis Cache HIT")
+        return cached_teachers
+
+    print("Redis Cache MISS")
+
+    # Step 2: Fetch teachers from PostgreSQL
     teachers = db.query(Teacher).order_by(
         Teacher.id
     ).all()
@@ -412,5 +541,8 @@ def get_all_teachers(
                 for subject in teacher.subjects
             ]
         })
+
+    # Step 3: Store teacher data in Redis
+    set_cached_teachers(result)
 
     return result
