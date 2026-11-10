@@ -1,15 +1,17 @@
-
+import os
 import redis
+from dotenv import load_dotenv
 
-# Connect to local Redis server
+load_dotenv()
+
 redis_client = redis.Redis(
-    host="localhost",
-    port=6379,
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
     db=0,
     decode_responses=True,
     socket_connect_timeout=3
 )
 
-# Check Redis connection
+
 def test_redis_connection():
     return redis_client.ping()

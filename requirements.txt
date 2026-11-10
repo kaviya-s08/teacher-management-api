@@ -4,3 +4,7 @@ sqlalchemy
 psycopg2-binary
 email-validator
 redis>=5.0,<7.0
+PyJWT
+pwdlib[argon2]
+python-dotenv
+python-multipart
