@@ -1,6 +1,12 @@
 
+import os
+
+# Tell the application that pytest is running.
+# This must happen before importing main.py.
+os.environ["TESTING"] = "1"
+
 import pytest
-import database
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -11,7 +17,10 @@ from database import Base, get_db
 from main import app
 
 
-# Create a separate in-memory SQLite database
+# --------------------------------------------------
+# 1. CREATE IN-MEMORY SQLITE DATABASE
+# --------------------------------------------------
+
 TEST_DATABASE_URL = "sqlite://"
 
 test_engine = create_engine(
@@ -27,7 +36,10 @@ TestingSessionLocal = sessionmaker(
 )
 
 
-# Create a fresh database for each test
+# --------------------------------------------------
+# 2. DATABASE FIXTURE
+# --------------------------------------------------
+
 @pytest.fixture
 def db_session():
 
@@ -37,12 +49,16 @@ def db_session():
 
     try:
         yield db
+
     finally:
         db.close()
         Base.metadata.drop_all(bind=test_engine)
 
 
-# Create FastAPI TestClient
+# --------------------------------------------------
+# 3. FASTAPI TEST CLIENT
+# --------------------------------------------------
+
 @pytest.fixture
 def client(db_session):
 
@@ -51,13 +67,18 @@ def client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
 
-    with TestClient(app) as test_client:
-        yield test_client
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
 
-    app.dependency_overrides.clear()
+    finally:
+        app.dependency_overrides.clear()
 
 
-# Create an authenticated user for protected API tests
+# --------------------------------------------------
+# 4. AUTHENTICATED USER FIXTURE
+# --------------------------------------------------
+
 @pytest.fixture
 def auth_headers(client):
 

@@ -1,4 +1,5 @@
 
+
 import os
 import smtplib
 import logging
@@ -8,7 +9,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -24,7 +24,6 @@ def send_teacher_registration_email(
             raise ValueError("Email credentials are missing")
 
         message = EmailMessage()
-
         message["Subject"] = "Teacher Registration Successful"
         message["From"] = sender_email
         message["To"] = teacher_email
@@ -42,9 +41,10 @@ Thank you.
         )
 
         with smtplib.SMTP_SSL(
-            "smtp.gmail.com", 465
+            "smtp.gmail.com",
+            465,
+            timeout=10
         ) as server:
-
             server.login(sender_email, sender_password)
             server.send_message(message)
 

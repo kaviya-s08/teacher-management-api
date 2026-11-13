@@ -1,5 +1,9 @@
 
 
+import os
+import logging
+
+from contextlib import asynccontextmanager
 
 from fastapi import (
     FastAPI,
@@ -9,12 +13,10 @@ from fastapi import (
     BackgroundTasks
 )
 
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from database import engine, Base, get_db
-import models
 
 from models import (
     Student,
@@ -26,14 +28,18 @@ from models import (
 from schemas import (
     StudentCreate,
     StudentUpdate,
-    StudentResponse
+    StudentResponse,
+    TeacherCreateRequest,
+    TeacherUpdateRequest,
+    SubjectCreate,
+    SubjectResponse,
+    SubjectAssignment
 )
 
 from auth import router as auth_router, get_current_user
 
 from email_service import send_teacher_registration_email
 
-# Redis cache imports
 from cache_service import (
     get_cached_teachers,
     set_cached_teachers,
@@ -42,38 +48,84 @@ from cache_service import (
 
 
 # --------------------------------------------------
-# 1. CREATE DATABASE TABLES
+# 1. LOGGING CONFIGURATION
 # --------------------------------------------------
 
-Base.metadata.create_all(bind=engine)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------
-# 2. CREATE FASTAPI APPLICATION
+# 2. SAFE REDIS CACHE INVALIDATION
+# --------------------------------------------------
+
+def safe_clear_teacher_cache():
+    """
+    Clear teacher cache safely.
+    API operations should continue even if Redis is unavailable.
+    """
+
+    try:
+        clear_teacher_cache()
+        logger.info("Teacher cache cleared successfully")
+
+    except Exception:
+        logger.exception("Redis cache clearing failed")
+
+
+# --------------------------------------------------
+# 3. DATABASE INITIALIZATION USING LIFESPAN
+# --------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    # Do not connect to PostgreSQL during tests.
+    if os.getenv("TESTING") != "1":
+
+        Base.metadata.create_all(bind=engine)
+
+        logger.info("Database tables initialized successfully")
+
+    yield
+
+
+# --------------------------------------------------
+# 4. CREATE FASTAPI APPLICATION
 # --------------------------------------------------
 
 app = FastAPI(
     title="Teacher Management API",
-    description="Teacher and Student Management API with JWT Authentication, SQLAlchemy Relationships, Background Email Notifications and Redis Caching",
-    version="6.0.0"
+    description=(
+        "Teacher and Student Management API with JWT Authentication, "
+        "SQLAlchemy Relationships, Background Email Notifications "
+        "and Redis Caching"
+    ),
+    version="7.0.0",
+    lifespan=lifespan
 )
 
 app.include_router(auth_router)
 
 
 # --------------------------------------------------
-# 3. HOME API
+# 5. HOME API
 # --------------------------------------------------
 
 @app.get("/")
 def home():
+
     return {
         "message": "Teacher Management API is running"
     }
 
 
 # --------------------------------------------------
-# 4. CREATE STUDENT
+# 6. CREATE STUDENT
 # --------------------------------------------------
 
 @app.post(
@@ -107,7 +159,7 @@ def create_student(
 
 
 # --------------------------------------------------
-# 5. VIEW ALL STUDENTS
+# 7. VIEW ALL STUDENTS
 # --------------------------------------------------
 
 @app.get(
@@ -123,7 +175,7 @@ def get_students(
 
 
 # --------------------------------------------------
-# 6. VIEW SINGLE STUDENT
+# 8. VIEW SINGLE STUDENT
 # --------------------------------------------------
 
 @app.get(
@@ -141,6 +193,7 @@ def get_student(
     ).first()
 
     if student is None:
+
         raise HTTPException(
             status_code=404,
             detail="Student not found"
@@ -150,7 +203,7 @@ def get_student(
 
 
 # --------------------------------------------------
-# 7. UPDATE STUDENT
+# 9. UPDATE STUDENT
 # --------------------------------------------------
 
 @app.put(
@@ -169,6 +222,7 @@ def update_student(
     ).first()
 
     if student is None:
+
         raise HTTPException(
             status_code=404,
             detail="Student not found"
@@ -195,7 +249,7 @@ def update_student(
 
 
 # --------------------------------------------------
-# 8. DELETE STUDENT
+# 10. DELETE STUDENT
 # --------------------------------------------------
 
 @app.delete("/students/{student_id}")
@@ -210,6 +264,7 @@ def delete_student(
     ).first()
 
     if student is None:
+
         raise HTTPException(
             status_code=404,
             detail="Student not found"
@@ -222,28 +277,6 @@ def delete_student(
         "message": "Student deleted successfully",
         "id": student_id
     }
-
-
-# --------------------------------------------------
-# 9. TEACHER REGISTRATION REQUEST MODEL
-# --------------------------------------------------
-
-class TeacherCreateRequest(BaseModel):
-
-    name: str = Field(min_length=2, max_length=100)
-
-    email: str = Field(min_length=5, max_length=255)
-
-
-# --------------------------------------------------
-# 10. TEACHER UPDATE REQUEST MODEL
-# --------------------------------------------------
-
-class TeacherUpdateRequest(BaseModel):
-
-    name: str = Field(min_length=2, max_length=100)
-
-    email: str = Field(min_length=5, max_length=255)
 
 
 # --------------------------------------------------
@@ -280,18 +313,26 @@ def create_teacher(
             detail="A teacher with this email already exists"
         )
 
-    # Clear cache after successful teacher registration
-    clear_teacher_cache()
+    # Clear Redis cache safely.
+    safe_clear_teacher_cache()
 
-    # Schedule email notification in background
+    # Schedule email notification in the background.
     background_tasks.add_task(
         send_teacher_registration_email,
         new_teacher.email,
         new_teacher.name
     )
 
+    logger.info(
+        "Teacher registered successfully: %s",
+        new_teacher.email
+    )
+
     return {
-        "message": "Teacher registered successfully. Email notification scheduled.",
+        "message": (
+            "Teacher registered successfully. "
+            "Email notification scheduled."
+        ),
         "teacher": {
             "id": new_teacher.id,
             "name": new_teacher.name,
@@ -317,6 +358,7 @@ def update_teacher(
     ).first()
 
     if teacher is None:
+
         raise HTTPException(
             status_code=404,
             detail="Teacher not found"
@@ -337,8 +379,9 @@ def update_teacher(
             detail="A teacher with this email already exists"
         )
 
-    # Clear cache after successful update
-    clear_teacher_cache()
+    safe_clear_teacher_cache()
+
+    logger.info("Teacher updated: %s", teacher_id)
 
     return {
         "message": "Teacher updated successfully",
@@ -366,6 +409,7 @@ def delete_teacher(
     ).first()
 
     if teacher is None:
+
         raise HTTPException(
             status_code=404,
             detail="Teacher not found"
@@ -381,11 +425,14 @@ def delete_teacher(
 
         raise HTTPException(
             status_code=409,
-            detail="Unable to delete teacher because related records exist"
+            detail=(
+                "Unable to delete teacher because related records exist"
+            )
         )
 
-    # Clear cache after successful deletion
-    clear_teacher_cache()
+    safe_clear_teacher_cache()
+
+    logger.info("Teacher deleted: %s", teacher_id)
 
     return {
         "message": "Teacher deleted successfully",
@@ -394,16 +441,64 @@ def delete_teacher(
 
 
 # --------------------------------------------------
-# 14. REQUEST MODEL FOR ASSIGNING SUBJECTS
+# 14. CREATE SUBJECT
 # --------------------------------------------------
 
-class SubjectAssignment(BaseModel):
+@app.post(
+    "/subjects",
+    response_model=SubjectResponse,
+    status_code=status.HTTP_201_CREATED
+)
+def create_subject(
+    subject_data: SubjectCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
 
-    subject_ids: list[int] = Field(default_factory=list)
+    new_subject = Subject(
+        subject_name=subject_data.subject_name
+    )
+
+    db.add(new_subject)
+
+    try:
+        db.commit()
+        db.refresh(new_subject)
+
+    except IntegrityError:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="This subject already exists"
+        )
+
+    logger.info(
+        "Subject created: %s",
+        new_subject.subject_name
+    )
+
+    return new_subject
 
 
 # --------------------------------------------------
-# 15. ASSIGN SUBJECTS TO A TEACHER
+# 15. GET ALL SUBJECTS
+# --------------------------------------------------
+
+@app.get(
+    "/subjects",
+    response_model=list[SubjectResponse]
+)
+def get_all_subjects(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+
+    return db.query(Subject).order_by(Subject.id).all()
+
+
+# --------------------------------------------------
+# 16. ASSIGN SUBJECTS TO A TEACHER
 # --------------------------------------------------
 
 @app.post("/teachers/{teacher_id}/subjects")
@@ -419,6 +514,7 @@ def assign_subjects(
     ).first()
 
     if teacher is None:
+
         raise HTTPException(
             status_code=404,
             detail="Teacher not found"
@@ -430,27 +526,37 @@ def assign_subjects(
         Subject.id.in_(subject_ids)
     ).all()
 
-    found_ids = {subject.id for subject in subjects}
+    found_ids = {
+        subject.id for subject in subjects
+    }
 
     missing_ids = set(subject_ids) - found_ids
 
     if missing_ids:
+
         raise HTTPException(
             status_code=404,
             detail=f"Subjects not found: {sorted(missing_ids)}"
         )
 
-    existing_ids = {subject.id for subject in teacher.subjects}
+    existing_ids = {
+        subject.id for subject in teacher.subjects
+    }
 
     for subject in subjects:
+
         if subject.id not in existing_ids:
             teacher.subjects.append(subject)
 
     db.commit()
     db.refresh(teacher)
 
-    # Clear cache because assigned subjects changed
-    clear_teacher_cache()
+    safe_clear_teacher_cache()
+
+    logger.info(
+        "Subjects assigned to teacher: %s",
+        teacher_id
+    )
 
     return {
         "message": "Subjects assigned successfully",
@@ -467,7 +573,7 @@ def assign_subjects(
 
 
 # --------------------------------------------------
-# 16. GET SUBJECTS ASSIGNED TO A TEACHER
+# 17. GET SUBJECTS ASSIGNED TO A TEACHER
 # --------------------------------------------------
 
 @app.get("/teachers/{teacher_id}/subjects")
@@ -482,6 +588,7 @@ def get_teacher_subjects(
     ).first()
 
     if teacher is None:
+
         raise HTTPException(
             status_code=404,
             detail="Teacher not found"
@@ -502,7 +609,7 @@ def get_teacher_subjects(
 
 
 # --------------------------------------------------
-# 17. GET ALL TEACHERS WITH THEIR SUBJECTS
+# 18. GET ALL TEACHERS WITH THEIR SUBJECTS
 # --------------------------------------------------
 
 @app.get("/teachers")
@@ -511,16 +618,28 @@ def get_all_teachers(
     current_user: User = Depends(get_current_user)
 ):
 
-    # Step 1: Check Redis cache
-    cached_teachers = get_cached_teachers()
+    # First, try retrieving data from Redis.
+    try:
 
-    if cached_teachers is not None:
-        print("Redis Cache HIT")
-        return cached_teachers
+        cached_teachers = get_cached_teachers()
 
-    print("Redis Cache MISS")
+        if cached_teachers is not None:
 
-    # Step 2: Fetch teachers from PostgreSQL
+            logger.info("Redis Cache HIT")
+
+            return cached_teachers
+
+        logger.info("Redis Cache MISS")
+
+    except Exception:
+
+        logger.exception(
+            "Redis unavailable. Fetching teachers from database."
+        )
+
+    # If Redis is unavailable or cache is empty,
+    # retrieve data directly from the database.
+
     teachers = db.query(Teacher).order_by(
         Teacher.id
     ).all()
@@ -542,7 +661,21 @@ def get_all_teachers(
             ]
         })
 
-    # Step 3: Store teacher data in Redis
-    set_cached_teachers(result)
+    # Try saving the result in Redis.
+    # A Redis failure must not cause the API to fail.
+
+    try:
+
+        set_cached_teachers(result)
+
+        logger.info(
+            "Teacher list cached successfully"
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Unable to save teacher list in Redis."
+        )
 
     return result
