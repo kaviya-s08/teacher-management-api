@@ -364,7 +364,7 @@ Open the following link in your browser:
 
 
 
-http://127.0.0.1:8000/docs
+&#x20; --http://127.0.0.1:8000/docs
 
 
 
