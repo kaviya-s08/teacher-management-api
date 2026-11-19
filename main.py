@@ -1,4 +1,5 @@
 
+
 import os
 import logging
 
@@ -37,6 +38,7 @@ from schemas import (
 
 from auth import router as auth_router, get_current_user
 from ai import router as ai_router
+from semantic_search import router as semantic_search_router
 
 from email_service import send_teacher_registration_email
 
@@ -111,6 +113,7 @@ app = FastAPI(
 
 app.include_router(auth_router)
 app.include_router(ai_router)
+app.include_router(semantic_search_router)
 
 
 # --------------------------------------------------

@@ -82,3 +82,22 @@ class SubjectResponse(BaseModel):
 
 class SubjectAssignment(BaseModel):
     subject_ids: list[int] = Field(default_factory=list)
+
+
+# -----------------------------
+# Semantic Search Schemas
+# -----------------------------
+
+class SemanticSearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=500)
+    limit: int = Field(default=3, ge=1, le=10)
+
+
+class SemanticSearchResult(BaseModel):
+    text: str
+    score: float
+
+
+class SemanticSearchResponse(BaseModel):
+    query: str
+    results: list[SemanticSearchResult]

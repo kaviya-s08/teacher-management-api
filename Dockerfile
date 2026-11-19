@@ -5,7 +5,19 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-RUN python -m pip install --no-cache-dir --default-timeout=120 --retries=10 -r requirements.txt
+# Install CPU-only PyTorch
+RUN python -m pip install --no-cache-dir \
+    --default-timeout=120 \
+    --retries=10 \
+    --index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://pypi.org/simple \
+    torch
+
+# Install remaining project dependencies
+RUN python -m pip install --no-cache-dir \
+    --default-timeout=120 \
+    --retries=10 \
+    -r requirements.txt
 
 COPY . .
 
