@@ -1,66 +1,119 @@
 
-from sentence_transformers import SentenceTransformer
-from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct
+import os
 from uuid import uuid4
 
-# Connect to Qdrant
-client = QdrantClient(url="http://localhost:6333")
-
-# Load the embedding model
-print("Loading embedding model...")
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-# Collection name
-collection_name = "teacher_documents"
-
-# Sample documents
-documents = [
-    "Python is a popular programming language.",
-    "Java is widely used for software development.",
-    "Machine learning helps computers learn from data.",
-    "Artificial intelligence makes machines intelligent.",
-    "PostgreSQL is a relational database management system.",
-    "FastAPI is a Python framework for building APIs."
-]
-
-# Generate embeddings
-print("\nGenerating embeddings...")
-embeddings = model.encode(documents)
-
-# Prepare data for Qdrant
-points = []
-
-for document, embedding in zip(documents, embeddings):
-    point = PointStruct(
-        id=str(uuid4()),
-        vector=embedding.tolist(),
-        payload={
-            "text": document
-        }
-    )
-
-    points.append(point)
-
-# Store documents and embeddings
-client.upsert(
-    collection_name=collection_name,
-    points=points
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    VectorParams,
+    Distance,
+    PointStruct,
+    Filter,
+    FieldCondition,
+    MatchValue
 )
 
-print("\nDocuments stored successfully in Qdrant!")
 
-# Verify stored documents
-result = client.scroll(
-    collection_name=collection_name,
-    limit=10,
-    with_payload=True,
-    with_vectors=False
-)
+class VectorStore:
 
-print("\nStored documents:")
+    def __init__(self):
 
-for point in result[0]:
-    print("-", point.payload["text"])
+        self.client = QdrantClient(
+            url=os.getenv(
+                "QDRANT_URL",
+                "http://localhost:6333"
+            )
+        )
 
-print("\nTotal documents inserted:", len(points))
+        self.collection_name = "teacher_documents"
+
+        self.create_collection()
+
+    def create_collection(self):
+
+        if not self.client.collection_exists(
+            self.collection_name
+        ):
+
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(
+                    size=384,
+                    distance=Distance.COSINE
+                )
+            )
+
+            print("PDF collection created successfully!")
+
+        else:
+
+            print("PDF collection already exists!")
+
+    def store_chunks(
+        self,
+        chunks,
+        embeddings,
+        document_id,
+        user_id
+    ):
+
+        if len(chunks) != len(embeddings):
+            raise ValueError(
+                "Number of chunks and embeddings must match."
+            )
+
+        points = []
+
+        for chunk, embedding in zip(chunks, embeddings):
+
+            point = PointStruct(
+                id=str(uuid4()),
+                vector=embedding,
+                payload={
+                    "document_id": document_id,
+                    "user_id": user_id,
+                    "chunk_id": chunk["chunk_id"],
+                    "page_number": chunk["page_number"],
+                    "text": chunk["text"]
+                }
+            )
+
+            points.append(point)
+
+        if points:
+
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=points
+            )
+
+        print(f"{len(points)} chunks stored successfully!")
+
+    def search_similar_chunks(
+        self,
+        query_embedding,
+        user_id,
+        limit=3
+    ):
+
+        user_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="user_id",
+                    match=MatchValue(value=user_id)
+                )
+            ]
+        )
+
+        results = self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_embedding,
+            query_filter=user_filter,
+            limit=limit,
+            with_payload=True
+        ).points
+
+        return results
+
+
+# Create reusable vector store
+vector_store = VectorStore()

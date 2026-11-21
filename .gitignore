@@ -31,3 +31,7 @@ htmlcov/
 # Project ZIP and nested folder
 teacher_management.zip
 teacher_management/
+# RAG sample documents
+sample.pdf
+sample.pdf.docx
+sample.txt
